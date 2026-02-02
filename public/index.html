@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bank Statement Parser</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .container {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      max-width: 1000px;
+      width: 100%;
+      padding: 40px;
+    }
+
+    h1 {
+      color: #333;
+      margin-bottom: 30px;
+      text-align: center;
+    }
+
+    .upload-section {
+      margin-bottom: 40px;
+    }
+
+    .upload-area {
+      border: 2px dashed #667eea;
+      border-radius: 8px;
+      padding: 40px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.3s;
+      background: #f8f9ff;
+    }
+
+    .upload-area:hover {
+      border-color: #764ba2;
+      background: #f0f1ff;
+    }
+
+    .upload-area.dragover {
+      border-color: #764ba2;
+      background: #e8ebff;
+    }
+
+    .icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+
+    .upload-area p {
+      margin: 8px 0;
+      color: #666;
+    }
+
+    .upload-area p strong {
+      color: #333;
+    }
+
+    input[type="file"] {
+      display: none;
+    }
+
+    .error {
+      background: #fee;
+      color: #c33;
+      padding: 12px;
+      border-radius: 6px;
+      margin: 20px 0;
+      display: none;
+    }
+
+    .error.show {
+      display: block;
+    }
+
+    .loading {
+      text-align: center;
+      margin: 20px 0;
+      display: none;
+    }
+
+    .loading.show {
+      display: block;
+    }
+
+    .spinner {
+      border: 3px solid #f3f3f3;
+      border-top: 3px solid #667eea;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+      margin: 0 auto;
+    }
+
+    @keyframes spin {
+      0% {
+        transform: rotate(0deg);
+      }
+      100% {
+        transform: rotate(360deg);
+      }
+    }
+
+    .results {
+      display: none;
+    }
+
+    .results.show {
+      display: block;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 20px;
+      margin: 20px 0;
+    }
+
+    .stat {
+      background: #f9f9f9;
+      padding: 20px;
+      border-radius: 8px;
+      border-left: 4px solid #667eea;
+    }
+
+    .stat-label {
+      color: #999;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .stat-value {
+      font-size: 28px;
+      font-weight: bold;
+      color: #333;
+      margin-top: 8px;
+    }
+
+    .download-btn {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 6px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+      margin: 20px 0;
+    }
+
+    .download-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+    }
+
+    .download-btn:active {
+      transform: translateY(0);
+    }
+
+    .transactions-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 20px 0;
+    }
+
+    .transactions-table th {
+      background: #f5f5f5;
+      padding: 12px;
+      text-align: left;
+      font-weight: 600;
+      color: #666;
+      border-bottom: 2px solid #ddd;
+    }
+
+    .transactions-table td {
+      padding: 12px;
+      border-bottom: 1px solid #eee;
+    }
+
+    .transactions-table tr:hover {
+      background: #f9f9f9;
+    }
+
+    .amount {
+      font-weight: 600;
+      font-family: monospace;
+    }
+
+    .amount.positive {
+      color: #27ae60;
+    }
+
+    .amount.negative {
+      color: #e74c3c;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .badge.deposit {
+      background: #d4edda;
+      color: #155724;
+    }
+
+    .badge.withdrawal {
+      background: #f8d7da;
+      color: #721c24;
+    }
+
+    .table-container {
+      max-height: 400px;
+      overflow-y: auto;
+      border: 1px solid #eee;
+      border-radius: 6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>📊 Bank Statement Parser</h1>
+
+    <div class="upload-section">
+      <div class="upload-area" id="uploadArea">
+        <div class="icon">📄</div>
+        <p><strong>Click to upload</strong> or drag and drop</p>
+        <p style="font-size: 12px; color: #999;">BOC Text-based PDF files</p>
+        <input type="file" id="fileInput" accept=".pdf" />
+      </div>
+
+      <div class="error" id="errorMessage"></div>
+      <div class="loading" id="loading">
+        <div class="spinner"></div>
+        <p style="margin-top: 12px; color: #666;">Processing your file...</p>
+      </div>
+    </div>
+
+    <div class="results" id="results">
+      <div class="summary">
+        <div class="stat">
+          <div class="stat-label">Total Transactions</div>
+          <div class="stat-value" id="totalCount">0</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Total Deposits</div>
+          <div class="stat-value" style="color: #27ae60;" id="depositCount">0</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Total Withdrawals</div>
+          <div class="stat-value" style="color: #e74c3c;" id="withdrawalCount">0</div>
+        </div>
+      </div>
+
+      <button class="download-btn" id="downloadBtn">⬇️ Download as CSV</button>
+
+      <div class="table-container">
+        <table class="transactions-table" id="transactionsTable">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Description</th>
+              <th>Type</th>
+              <th style="text-align: right;">Amount</th>
+              <th style="text-align: right;">Balance</th>
+            </tr>
+          </thead>
+          <tbody id="transactionsBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+<script>
+    let currentTransactions = [];
+
+    const uploadArea = document.getElementById("uploadArea");
+    const fileInput = document.getElementById("fileInput");
+    const errorMessage = document.getElementById("errorMessage");
+    const loading = document.getElementById("loading");
+    const results = document.getElementById("results");
+    const downloadBtn = document.getElementById("downloadBtn");
+
+    uploadArea.addEventListener("click", () => fileInput.click());
+
+    uploadArea.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      uploadArea.classList.add("dragover");
+    });
+
+    uploadArea.addEventListener("dragleave", () => {
+      uploadArea.classList.remove("dragover");
+    });
+
+    uploadArea.addEventListener("drop", (e) => {
+      e.preventDefault();
+      uploadArea.classList.remove("dragover");
+      const files = e.dataTransfer.files;
+      if (files.length) handleFile(files[0]);
+    });
+
+    fileInput.addEventListener("change", (e) => {
+      console.log("File input changed:", e.target.files);
+      if (e.target.files.length) handleFile(e.target.files[0]);
+    });
+
+    downloadBtn.addEventListener("click", downloadCSV);
+
+    function showError(message) {
+      console.error("Error:", message);
+      errorMessage.textContent = `❌ ${message}`;
+      errorMessage.classList.add("show");
+      loading.classList.remove("show");
+    }
+
+    async function handleFile(file) {
+      console.log("handleFile called with:", file);
+      
+      if (file.type !== "application/pdf") {
+        showError("Please upload a PDF file. Got: " + file.type);
+        return;
+      }
+
+      errorMessage.classList.remove("show");
+      loading.classList.add("show");
+      results.classList.remove("show");
+
+      const formData = new FormData();
+      formData.append("file", file);
+
+      console.log("Sending upload request...");
+
+      try {
+        const response = await fetch("/api/upload", {
+          method: "POST",
+          body: formData,
+        });
+
+        console.log("Response status:", response.status);
+        console.log("Response ok:", response.ok);
+
+        const data = await response.json();
+        console.log("Response data:", data);
+
+        if (!response.ok) {
+          showError(data.error || `Upload failed with status ${response.status}`);
+          return;
+        }
+
+        loading.classList.remove("show");
+        currentTransactions = data.transactions;
+
+        console.log("Transactions:", data.transactions);
+
+        const deposits = data.transactions.filter((tx) => tx.type === "deposit");
+        const withdrawals = data.transactions.filter(
+          (tx) => tx.type === "withdrawal"
+        );
+
+        document.getElementById("totalCount").textContent =
+          data.transactions.length;
+        document.getElementById("depositCount").textContent = deposits.length;
+        document.getElementById("withdrawalCount").textContent =
+          withdrawals.length;
+
+        const tbody = document.getElementById("transactionsBody");
+        tbody.innerHTML = "";
+
+        data.transactions.forEach((tx) => {
+          const row = document.createElement("tr");
+          const amountClass = tx.amount > 0 ? "positive" : "negative";
+          row.innerHTML = `
+            <td>${tx.date}</td>
+            <td>${tx.description}</td>
+            <td><span class="badge ${tx.type}">${tx.type}</span></td>
+            <td style="text-align: right;"><span class="amount ${amountClass}">${
+            tx.amount > 0 ? "+" : ""
+          }${tx.amount.toFixed(2)}</span></td>
+            <td style="text-align: right;">${tx.balance.toFixed(2)}</td>
+          `;
+          tbody.appendChild(row);
+        });
+
+        results.classList.add("show");
+      } catch (error) {
+        console.error("Fetch error:", error);
+        showError(error.message || "An error occurred");
+      }
+    }
+
+    async function downloadCSV() {
+      try {
+        const response = await fetch("/api/download", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ transactions: currentTransactions }),
+        });
+
+        if (!response.ok) {
+          showError("Download failed");
+          return;
+        }
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "transactions.csv";
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+      } catch (error) {
+        showError(error.message || "Download failed");
+      }
+    }
+  </script>
+</body>
+</html>
