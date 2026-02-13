@@ -4,7 +4,7 @@ dotenv.config();
 import express from "express";
 import multer from "multer";
 import fs from "fs";
-import { BOCParser } from "./parsers/bocParser.js";
+import { BOCParser } from "./parsers/bocParserOCR.js";
 import { Parser } from "json2csv";
 import { BankTransaction } from "./types/index.js";
 

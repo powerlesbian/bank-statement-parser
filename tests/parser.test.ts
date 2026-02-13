@@ -1,4 +1,4 @@
-import { BOCParser } from '../src/parsers/bocParser.js';
+import { BOCParser } from '../src/parsers/bocParserOCR.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';

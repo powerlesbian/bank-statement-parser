@@ -1,185 +1,209 @@
-import Tesseract from 'tesseract.js';
-import pdf from 'pdf-parse';
-import { createWorker } from 'tesseract.js';
+import Anthropic from '@anthropic-ai/sdk';
 import { BankTransaction, ParseResult } from '../types/index.js';
 import { fromPath } from 'pdf2pic';
 import fs from 'fs';
-import path from 'path';
+
+let client: Anthropic;
+function getClient() {
+  if (!client) {
+    client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  }
+  return client;
+}
+
+const EXTRACTION_PROMPT = `Extract all bank transactions from this Bank of China (BOC) Hong Kong bank statement. Return ONLY a JSON array with no other text.
+
+Each transaction object must have:
+- "date": string in "YYYY-MM-DD" format
+- "description": the transaction description (e.g. "交換票", "現金交易", "自動轉賬", "存入")
+- "amount": number — negative for withdrawals/debits, positive for deposits/credits
+- "type": "deposit" or "withdrawal"
+- "balance": number — the running balance after the transaction
+
+Look carefully at every row in the statement. Dates are typically in YYYY/MM/DD format. There may be columns for deposits (存入) and withdrawals (支出) with a running balance (結餘).
+
+Return ONLY the JSON array, no markdown fencing, no explanation. Example:
+[{"date":"2025-12-01","description":"交換票","amount":-3960.00,"type":"withdrawal","balance":50000.00}]`;
 
 export class BOCParser {
-  
+
   async parsePDF(buffer: Buffer): Promise<ParseResult> {
     try {
       console.log('📥 Converting PDF to images...');
-      
-      // Save buffer temporarily
+
       const tempPdfPath = `/tmp/temp_${Date.now()}.pdf`;
       fs.writeFileSync(tempPdfPath, buffer);
-      
-      // Convert PDF to images
+
       const options = {
         density: 300,
         saveFilename: "page",
         savePath: "/tmp",
-        format: "png",
+        format: "png" as const,
         width: 2000,
-        height: 2000
+        height: 2000,
       };
-      
+
       const convert = fromPath(tempPdfPath, options);
-      
-      // Convert page 2 (where your table is)
-      const pageImage = await convert(2, { responseType: "image" });
-      
-      console.log('🔍 Running OCR on page 2...');
-      
-      // Run Tesseract OCR with Chinese + English
-      const worker = await createWorker('chi_sim+eng');
-      const { data: { text } } = await worker.recognize(pageImage.path);
-      await worker.terminate();
-      
-      console.log('✅ OCR complete, parsing transactions...');
-      
-      // Clean up temp files
-      fs.unlinkSync(tempPdfPath);
-      if (pageImage.path) fs.unlinkSync(pageImage.path);
-      
-      // Parse the OCR text
-      const transactions = this.parseTransactionsFromText(text);
-      
-      return {
-        transactions,
-        errors: [],
-        totalProcessed: transactions.length,
-      };
-      
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-      console.error('❌ Error:', errorMsg);
-      return {
-        transactions: [],
-        errors: [errorMsg],
-        totalProcessed: 0,
-      };
-    }
-  }
-  
-  async parseImage(imagePath: string): Promise<ParseResult> {
-    try {
-      console.log('🔍 Running OCR on image...');
-      
-      const worker = await createWorker('chi_sim+eng');
-      const { data: { text } } = await worker.recognize(imagePath);
-      await worker.terminate();
-      
-      console.log('✅ OCR complete, parsing transactions...');
-      
-      const transactions = this.parseTransactionsFromText(text);
-      
-      return {
-        transactions,
-        errors: [],
-        totalProcessed: transactions.length,
-      };
-      
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-      console.error('❌ Error:', errorMsg);
-      return {
-        transactions: [],
-        errors: [errorMsg],
-        totalProcessed: 0,
-      };
-    }
-  }
-  
-  private parseTransactionsFromText(text: string): BankTransaction[] {
-    const transactions: BankTransaction[] = [];
-    const lines = text.split('\n');
-    
-    // Look for lines that start with dates (2025/11/29 format)
-    const datePattern = /^(\d{4}\/\d{1,2}\/\d{1,2})/;
-    
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      
-      if (datePattern.test(line)) {
+      const imageContents: Anthropic.ImageBlockParam[] = [];
+      const tempImagePaths: string[] = [];
+
+      // Convert each page to an image
+      let pageNum = 1;
+      while (true) {
         try {
-          // Split by whitespace
-          const parts = line.split(/\s+/);
-          
-          if (parts.length < 4) continue;
-          
-          const date = parts[0]; // Transaction date
-          const valueDate = parts[1]; // Value date
-          
-          // Find the description (Chinese characters)
-          let descIndex = 2;
-          let description = parts[descIndex];
-          
-          // Look for reference number (all digits)
-          let refNumber = '';
-          let amountIndex = descIndex + 1;
-          
-          if (parts[amountIndex] && /^\d+$/.test(parts[amountIndex])) {
-            refNumber = parts[amountIndex];
-            amountIndex++;
+          console.log(`📄 Converting page ${pageNum}...`);
+          const pageImage = await convert(pageNum, { responseType: "image" });
+          if (pageImage.path) {
+            tempImagePaths.push(pageImage.path);
+            const imageData = fs.readFileSync(pageImage.path);
+            const base64 = imageData.toString('base64');
+            imageContents.push({
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: 'image/png',
+                data: base64,
+              },
+            });
           }
-          
-          // Find the transaction ID if exists
-          if (parts[amountIndex] && /^\d{10}$/.test(parts[amountIndex])) {
-            amountIndex++;
-          }
-          
-          // Parse amounts - deposits and withdrawals
-          let deposit = 0;
-          let withdrawal = 0;
-          let balance = 0;
-          
-          // The amounts are typically in the last 3 columns
-          const lastParts = parts.slice(-3);
-          
-          for (const part of lastParts) {
-            const cleaned = part.replace(/,/g, '');
-            const num = parseFloat(cleaned);
-            
-            if (!isNaN(num)) {
-              if (balance === 0) {
-                balance = num; // Last number is balance
-              } else if (withdrawal === 0 && deposit === 0) {
-                // Could be deposit or withdrawal
-                if (parts.includes('存入') || description.includes('存入')) {
-                  deposit = num;
-                } else {
-                  withdrawal = num;
-                }
-              }
-            }
-          }
-          
-          const amount = deposit > 0 ? deposit : -withdrawal;
-          
-          transactions.push({
-            date: this.formatDate(date),
-            description: `${description} ${refNumber}`.trim(),
-            amount: amount,
-            type: deposit > 0 ? 'deposit' : 'withdrawal',
-            balance: balance,
-            source: 'BOC',
-            uploadedAt: new Date().toISOString(),
-          });
-          
-        } catch (e) {
-          console.warn('⚠️ Failed to parse line:', line);
+          pageNum++;
+        } catch {
+          break;
         }
       }
+
+      const totalPages = pageNum - 1;
+      console.log(`📄 Converted ${totalPages} pages to images`);
+
+      // Clean up temp files
+      fs.unlinkSync(tempPdfPath);
+      for (const imgPath of tempImagePaths) {
+        try { fs.unlinkSync(imgPath); } catch {}
+      }
+
+      if (totalPages === 0) {
+        return { transactions: [], errors: ['Could not convert PDF to images'], totalProcessed: 0 };
+      }
+
+      // Send all page images to Claude Vision
+      console.log('🤖 Sending to Claude Vision API...');
+      const message = await getClient().messages.create({
+        model: 'claude-sonnet-4-5-20250929',
+        max_tokens: 8192,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              ...imageContents,
+              { type: 'text', text: EXTRACTION_PROMPT },
+            ],
+          },
+        ],
+      });
+
+      const responseText = message.content[0].type === 'text' ? message.content[0].text : '';
+      console.log(`✅ Claude response length: ${responseText.length} chars`);
+
+      // Parse JSON from response
+      const jsonMatch = responseText.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) {
+        console.error('❌ Could not find JSON array in response:', responseText.substring(0, 200));
+        return { transactions: [], errors: ['Could not extract transactions from Claude response'], totalProcessed: 0 };
+      }
+
+      const rawTransactions = JSON.parse(jsonMatch[0]);
+      const transactions: BankTransaction[] = rawTransactions
+        .map((tx: any) => ({
+          date: tx.date,
+          description: tx.description || 'Transaction',
+          amount: parseFloat(tx.amount),
+          type: tx.type as 'deposit' | 'withdrawal',
+          balance: parseFloat(tx.balance) || 0,
+          source: 'BOC' as const,
+          uploadedAt: new Date().toISOString(),
+        }))
+        .filter((tx: BankTransaction) => !isNaN(tx.amount) && tx.amount !== 0);
+
+      console.log(`✅ Extracted ${transactions.length} transactions`);
+
+      return {
+        transactions,
+        errors: [],
+        totalProcessed: transactions.length,
+      };
+
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      console.error('❌ Error:', errorMsg);
+      return {
+        transactions: [],
+        errors: [errorMsg],
+        totalProcessed: 0,
+      };
     }
-    
-    return transactions;
   }
-  
-  private formatDate(dateStr: string): string {
-    // Convert 2025/12/01 to 2025-12-01
-    return dateStr.replace(/\//g, '-');
+
+  async parseImage(imagePath: string): Promise<ParseResult> {
+    try {
+      console.log('🤖 Sending image to Claude Vision API...');
+
+      const imageData = fs.readFileSync(imagePath);
+      const base64 = imageData.toString('base64');
+      const ext = imagePath.toLowerCase().split('.').pop();
+      const mediaType = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 'image/png';
+
+      const message = await getClient().messages.create({
+        model: 'claude-sonnet-4-5-20250929',
+        max_tokens: 8192,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'image',
+                source: { type: 'base64', media_type: mediaType, data: base64 },
+              },
+              { type: 'text', text: EXTRACTION_PROMPT },
+            ],
+          },
+        ],
+      });
+
+      const responseText = message.content[0].type === 'text' ? message.content[0].text : '';
+      const jsonMatch = responseText.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) {
+        return { transactions: [], errors: ['Could not extract transactions from Claude response'], totalProcessed: 0 };
+      }
+
+      const rawTransactions = JSON.parse(jsonMatch[0]);
+      const transactions: BankTransaction[] = rawTransactions
+        .map((tx: any) => ({
+          date: tx.date,
+          description: tx.description || 'Transaction',
+          amount: parseFloat(tx.amount),
+          type: tx.type as 'deposit' | 'withdrawal',
+          balance: parseFloat(tx.balance) || 0,
+          source: 'BOC' as const,
+          uploadedAt: new Date().toISOString(),
+        }))
+        .filter((tx: BankTransaction) => !isNaN(tx.amount) && tx.amount !== 0);
+
+      console.log(`✅ Extracted ${transactions.length} transactions`);
+
+      return {
+        transactions,
+        errors: [],
+        totalProcessed: transactions.length,
+      };
+
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      console.error('❌ Error:', errorMsg);
+      return {
+        transactions: [],
+        errors: [errorMsg],
+        totalProcessed: 0,
+      };
+    }
   }
 }
