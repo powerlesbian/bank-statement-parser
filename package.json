@@ -9,7 +9,9 @@
     "server": "tsx src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "test": "tsx tests/parser.test.ts"
+    "test": "tsx tests/parser.test.ts",
+    "deploy": "wrangler pages deploy public",
+    "pages:dev": "wrangler pages dev public"
   },
   "keywords": [],
   "author": "",
@@ -20,7 +22,9 @@
     "@types/node": "^25.2.0",
     "@types/pdf-parse": "^1.1.5",
     "tsx": "^4.7.0",
-    "typescript": "^5.9.3"
+    "@cloudflare/workers-types": "^4.20241230.0",
+    "typescript": "^5.9.3",
+    "wrangler": "^3.99.0"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.72.1",

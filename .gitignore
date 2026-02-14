@@ -5,3 +5,4 @@ uploads/
 *.pdf
 *.xlsx
 .DS_Store
+.wrangler/
