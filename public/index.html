@@ -36,6 +36,56 @@
       text-align: center;
     }
 
+    .password-section {
+      margin-bottom: 24px;
+    }
+
+    .password-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .password-row input {
+      flex: 1;
+      padding: 10px 14px;
+      border: 2px solid #ddd;
+      border-radius: 6px;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .password-row input:focus {
+      border-color: #667eea;
+    }
+
+    .password-row button {
+      padding: 10px 20px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .password-row button:hover {
+      opacity: 0.9;
+    }
+
+    .password-status {
+      margin-top: 8px;
+      font-size: 13px;
+      color: #999;
+    }
+
+    .password-status.unlocked {
+      color: #27ae60;
+    }
+
     .upload-section {
       margin-bottom: 40px;
     }
@@ -58,6 +108,12 @@
     .upload-area.dragover {
       border-color: #764ba2;
       background: #e8ebff;
+    }
+
+    .upload-area.disabled {
+      opacity: 0.5;
+      pointer-events: none;
+      cursor: not-allowed;
     }
 
     .icon {
@@ -243,20 +299,28 @@
 </head>
 <body>
   <div class="container">
-    <h1>📊 Bank Statement Parser</h1>
+    <h1>Bank Statement Parser</h1>
+
+    <div class="password-section">
+      <div class="password-row">
+        <input type="password" id="passwordInput" placeholder="Enter password to unlock uploads" />
+        <button id="unlockBtn">Unlock</button>
+      </div>
+      <div class="password-status" id="passwordStatus">Enter password to enable uploads</div>
+    </div>
 
     <div class="upload-section">
-      <div class="upload-area" id="uploadArea">
+      <div class="upload-area disabled" id="uploadArea">
         <div class="icon">📄</div>
         <p><strong>Click to upload</strong> or drag and drop</p>
-        <p style="font-size: 12px; color: #999;">BOC Text-based PDF files</p>
+        <p style="font-size: 12px; color: #999;">PDF bank statements (BOC, HSBC, SCB)</p>
         <input type="file" id="fileInput" accept=".pdf" />
       </div>
 
       <div class="error" id="errorMessage"></div>
       <div class="loading" id="loading">
         <div class="spinner"></div>
-        <p style="margin-top: 12px; color: #666;">Processing your file...</p>
+        <p style="margin-top: 12px; color: #666;">Sending PDF to Claude for parsing... this may take a moment.</p>
       </div>
     </div>
 
@@ -276,7 +340,7 @@
         </div>
       </div>
 
-      <button class="download-btn" id="downloadBtn">⬇️ Download as CSV</button>
+      <button class="download-btn" id="downloadBtn">Download as CSV</button>
 
       <div class="table-container">
         <table class="transactions-table" id="transactionsTable">
@@ -297,6 +361,7 @@
 
 <script>
     let currentTransactions = [];
+    let authPassword = localStorage.getItem('app_password') || '';
 
     const uploadArea = document.getElementById("uploadArea");
     const fileInput = document.getElementById("fileInput");
@@ -304,12 +369,38 @@
     const loading = document.getElementById("loading");
     const results = document.getElementById("results");
     const downloadBtn = document.getElementById("downloadBtn");
+    const passwordInput = document.getElementById("passwordInput");
+    const unlockBtn = document.getElementById("unlockBtn");
+    const passwordStatus = document.getElementById("passwordStatus");
 
-    uploadArea.addEventListener("click", () => fileInput.click());
+    // Restore saved password
+    if (authPassword) {
+      passwordInput.value = authPassword;
+      unlockUpload();
+    }
+
+    unlockBtn.addEventListener("click", unlockUpload);
+    passwordInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") unlockUpload();
+    });
+
+    function unlockUpload() {
+      const pw = passwordInput.value.trim();
+      if (!pw) return;
+      authPassword = pw;
+      localStorage.setItem('app_password', pw);
+      uploadArea.classList.remove("disabled");
+      passwordStatus.textContent = "Unlocked — ready to upload";
+      passwordStatus.classList.add("unlocked");
+    }
+
+    uploadArea.addEventListener("click", () => {
+      if (!uploadArea.classList.contains("disabled")) fileInput.click();
+    });
 
     uploadArea.addEventListener("dragover", (e) => {
       e.preventDefault();
-      uploadArea.classList.add("dragover");
+      if (!uploadArea.classList.contains("disabled")) uploadArea.classList.add("dragover");
     });
 
     uploadArea.addEventListener("dragleave", () => {
@@ -319,29 +410,31 @@
     uploadArea.addEventListener("drop", (e) => {
       e.preventDefault();
       uploadArea.classList.remove("dragover");
+      if (uploadArea.classList.contains("disabled")) return;
       const files = e.dataTransfer.files;
       if (files.length) handleFile(files[0]);
     });
 
     fileInput.addEventListener("change", (e) => {
-      console.log("File input changed:", e.target.files);
       if (e.target.files.length) handleFile(e.target.files[0]);
     });
 
     downloadBtn.addEventListener("click", downloadCSV);
 
     function showError(message) {
-      console.error("Error:", message);
-      errorMessage.textContent = `❌ ${message}`;
+      errorMessage.textContent = message;
       errorMessage.classList.add("show");
       loading.classList.remove("show");
     }
 
     async function handleFile(file) {
-      console.log("handleFile called with:", file);
-      
       if (file.type !== "application/pdf") {
-        showError("Please upload a PDF file. Got: " + file.type);
+        showError("Please upload a PDF file.");
+        return;
+      }
+
+      if (!authPassword) {
+        showError("Please enter the password first.");
         return;
       }
 
@@ -352,40 +445,40 @@
       const formData = new FormData();
       formData.append("file", file);
 
-      console.log("Sending upload request...");
-
       try {
         const response = await fetch("/api/upload", {
           method: "POST",
+          headers: { "X-Auth-Password": authPassword },
           body: formData,
         });
 
-        console.log("Response status:", response.status);
-        console.log("Response ok:", response.ok);
-
         const data = await response.json();
-        console.log("Response data:", data);
+
+        if (response.status === 401) {
+          localStorage.removeItem('app_password');
+          authPassword = '';
+          passwordInput.value = '';
+          uploadArea.classList.add("disabled");
+          passwordStatus.textContent = "Enter password to enable uploads";
+          passwordStatus.classList.remove("unlocked");
+          showError("Wrong password. Please try again.");
+          return;
+        }
 
         if (!response.ok) {
-          showError(data.error || `Upload failed with status ${response.status}`);
+          showError(data.error || "Upload failed");
           return;
         }
 
         loading.classList.remove("show");
         currentTransactions = data.transactions;
 
-        console.log("Transactions:", data.transactions);
-
         const deposits = data.transactions.filter((tx) => tx.type === "deposit");
-        const withdrawals = data.transactions.filter(
-          (tx) => tx.type === "withdrawal"
-        );
+        const withdrawals = data.transactions.filter((tx) => tx.type === "withdrawal");
 
-        document.getElementById("totalCount").textContent =
-          data.transactions.length;
+        document.getElementById("totalCount").textContent = data.transactions.length;
         document.getElementById("depositCount").textContent = deposits.length;
-        document.getElementById("withdrawalCount").textContent =
-          withdrawals.length;
+        document.getElementById("withdrawalCount").textContent = withdrawals.length;
 
         const tbody = document.getElementById("transactionsBody");
         tbody.innerHTML = "";
@@ -407,38 +500,38 @@
 
         results.classList.add("show");
       } catch (error) {
-        console.error("Fetch error:", error);
         showError(error.message || "An error occurred");
       }
     }
 
-    async function downloadCSV() {
-      try {
-        const response = await fetch("/api/download", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ transactions: currentTransactions }),
-        });
+    function downloadCSV() {
+      if (!currentTransactions.length) return;
 
-        if (!response.ok) {
-          showError("Download failed");
-          return;
-        }
+      const headers = ["date", "description", "amount", "type", "balance", "source"];
+      const csvRows = [headers.join(",")];
 
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "transactions.csv";
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-      } catch (error) {
-        showError(error.message || "Download failed");
-      }
+      currentTransactions.forEach((tx) => {
+        const row = [
+          tx.date,
+          '"' + (tx.description || '').replace(/"/g, '""') + '"',
+          tx.amount,
+          tx.type,
+          tx.balance,
+          tx.source || 'BOC',
+        ];
+        csvRows.push(row.join(","));
+      });
+
+      const csvString = csvRows.join("\n");
+      const blob = new Blob([csvString], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "transactions.csv";
+      document.body.appendChild(a);
+      a.click();
+      URL.revokeObjectURL(url);
+      document.body.removeChild(a);
     }
   </script>
 </body>
